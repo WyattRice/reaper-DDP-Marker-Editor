@@ -864,6 +864,8 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 	};
 
 	case WM_CLOSE:
+          DestroyWindow(hwndDlg);
+        return 0;
 	case WM_DESTROY: {
 		if (hEditMarkersDlg) saveConfiguration();
 		KillTimer(hwndDlg, 1);
