@@ -19,6 +19,11 @@ REAPER_PLUGIN_HINSTANCE g_hInst; // handle to the dll instance. could be useful 
 HWND g_parent; // global variable that holds the handle to the Reaper main window, useful for various win32 API calls
 
 
+#ifndef _WIN32
+#define MB_ICONWARNING 0
+#define MoveWindow(hwnd,x,y,w,h,activate) SetWindowPos(hwnd,NULL,x,y,w,h,SWP_NOZORDER)
+#endif
+
 
 #define MARKERS_INI_SECTION			"DDP marker editor"
 
@@ -186,7 +191,7 @@ int appendString(char **ppDestString, int ofs, char *pSrcString) {
 
 void writePrivateProfileInt(char *section, char *key, int value, char *configFileName) {
 	char valueStr[32];
-	itoa(value, valueStr, 10);
+	snprintf(valueStr,sizeof(valueStr),"%d",value);
 	WritePrivateProfileString(section, key, valueStr, configFileName);
 }
 
@@ -226,14 +231,11 @@ void saveConfiguration(void) {
 	writePrivateProfileInt(MARKERS_INI_SECTION, "w", R.right - R.left, configFileName);
 	writePrivateProfileInt(MARKERS_INI_SECTION, "h", R.bottom - R.top, configFileName);
 
-	LVCOLUMN lvc;
-	lvc.mask = LVCF_WIDTH;
 	for (int colIndex = 0; colIndex < NUM_MARKER_COLUMNS; colIndex++) {
-		lvc.iSubItem = colIndex;
-		ListView_GetColumn(hMarkerListWnd, colIndex, &lvc);
+		int cx = ListView_GetColumnWidth(hMarkerListWnd, colIndex);
 		char key[32];
 		sprintf(key, "col%d", colIndex);
-		writePrivateProfileInt(MARKERS_INI_SECTION, key, lvc.cx, configFileName);
+		writePrivateProfileInt(MARKERS_INI_SECTION, key, cx, configFileName);
 	}
 }
 
@@ -575,9 +577,9 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 
 	switch (uMsg) {
 	case WM_INITDIALOG: {
-		SetWindowLong(hwndDlg, DWLP_USER, lParam);
-		int itemIndex = lParam & 0x00FFFFFF;
-		char markerType = lParam >> 24;
+		SetWindowLongPtr(hwndDlg, GWLP_USERDATA, lParam);
+		int itemIndex = (int) (lParam & 0x00FFFFFF);
+		char markerType = (char) ((lParam >> 24)&0xff);
 		MarkerData *pMarkerData = (pMarkerList && (itemIndex >= 0) && (itemIndex < numMarkers)) ? pMarkerList + itemIndex : NULL;
 
 		for (int genreIndex = 1; genreIndex <= NUM_CDTEXT_GENRES; genreIndex++) {
@@ -600,12 +602,16 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 		if (pMarkerData) {
 			for (int colIndex = MARKER_COL_TITLE; colIndex <= MARKER_COL_GENRE; colIndex++) {
 				ListView_GetItemText(hMarkerListWnd, itemIndex, colIndex, valueText, sizeof(valueText) - 1);
+#ifdef _WIN32
 				SendDlgItemMessage(hwndDlg, 100 + colIndex - MARKER_COL_TITLE, EM_LIMITTEXT, 255, 0);
+#endif
 				SetDlgItemText(hwndDlg, 100 + colIndex - MARKER_COL_TITLE, valueText);
 			}
 
 			if (markerType == '@') {
+#ifdef _WIN32
 				SendDlgItemMessage(hwndDlg, 121, EM_LIMITTEXT, 13, 0);
+#endif
 				ListView_GetItemText(hMarkerListWnd, itemIndex, MARKER_COL_EAN, valueText, sizeof(valueText) - 1);
 				SetDlgItemText(hwndDlg, 121, valueText);
 				ListView_GetItemText(hMarkerListWnd, itemIndex, MARKER_COL_LANGUAGE, valueText, sizeof(valueText) - 1);
@@ -613,7 +619,9 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 				SendDlgItemMessage(hwndDlg, 120, CB_SETCURSEL, index, 0);
 			}
 			if (markerType == '#') {
+#ifdef _WIN32
 				SendDlgItemMessage(hwndDlg, 122, EM_LIMITTEXT, 12, 0);
+#endif
 				ListView_GetItemText(hMarkerListWnd, itemIndex, MARKER_COL_ISRC, valueText, sizeof(valueText) - 1);
 				SetDlgItemText(hwndDlg, 122, valueText);
 			}
@@ -623,10 +631,10 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 	case WM_COMMAND: {
 		if (LOWORD(wParam) == IDCANCEL) EndDialog(hwndDlg, IDCANCEL);
 		else if (LOWORD(wParam) == IDOK) {
-			int lParam = GetWindowLong(hwndDlg, DWLP_USER);
-			int itemIndex = lParam & 0x00FFFFFF;
+			LPARAM lParam = GetWindowLongPtr(hwndDlg, GWLP_USERDATA);
+			int itemIndex = (int) (lParam & 0x00FFFFFF);
 			int markerID = 0;
-			char markerType = lParam >> 24;
+			char markerType = (char) ((lParam >> 24)&0xff);
 			char name[4096];
 			name[0] = markerType;
 			name[1] = '\0';
@@ -701,14 +709,14 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 
 		hEditMarkersDlg = hwndDlg;
 		CheckMenuItem(hEditMenu, editMarkersRegisteredCommand, MF_CHECKED);
-		hMarkerListWnd = CreateWindowEx(WS_EX_CLIENTEDGE, WC_LISTVIEW, "", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SINGLESEL,
-			0, 0, 1, 1, hwndDlg, (HMENU)IDC_MARKERS_LIST, globalHInstance, NULL);
+		hMarkerListWnd = GetDlgItem(hwndDlg,IDC_MARKERS_LIST);
 
+#ifdef _WIN32
 		ListView_SetExtendedListViewStyle(hEditMarkersDlg, LVS_EX_FULLROWSELECT);
+#endif
 
-		lvc.mask = LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
+		lvc.mask = LVCF_WIDTH | LVCF_TEXT;
 		for (int colIndex = 0; colIndex < NUM_MARKER_COLUMNS; colIndex++) {
-			lvc.iSubItem = colIndex;
 			lvc.pszText = markerColumnNameList[colIndex];
 			lvc.cx = markerColumnWidthList[colIndex];
 			ListView_InsertColumn(hMarkerListWnd, colIndex, &lvc);
@@ -736,8 +744,10 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 	}; return 0;
 
 	case WM_SIZE: {
-		int w = LOWORD(lParam);
-		int h = HIWORD(lParam);
+                RECT r;
+                GetClientRect(hwndDlg,&r);
+		int w = r.right;
+		int h = r.bottom;
 		MoveWindow(hMarkerListWnd, 3, 3, w - 6, h - 25 - 6 - 6, true);
 		int w2 = 200;
 		if (w2 > w - 100 - 6) w2 = w - 100 - 6;
@@ -754,6 +764,7 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 			}
 		}
 
+#ifdef _WIN32
 		else if (pHdr->code == NM_KILLFOCUS) {
 			int selIndex = -1;
 			do {
@@ -763,13 +774,14 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 				}
 			} while (selIndex >= 0);
 		}
+#endif
 
 		else if (pHdr->code == NM_DBLCLK) {
 			SendMessage(hwndDlg, WM_COMMAND, IDC_EDIT_MARKER, 0);
 		}
 
 		else if (pHdr->code == NM_RCLICK) {
-			NMITEMACTIVATE *pListData = (NMITEMACTIVATE *)pHdr;
+			NMLISTVIEW *pListData = (NMLISTVIEW *)pHdr;
 			int index = pListData->iItem;
 			if (index < 0) index = numMarkers;
 			if (index > numMarkers) index = numMarkers;
@@ -788,6 +800,7 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 			}
 		}
 
+#ifdef _WIN32
 		else if ((pHdr->code == NM_RETURN) || (pHdr->code == LVN_KEYDOWN)) {
 			if (pHdr->code == NM_RETURN) {
 				SendMessage(hwndDlg, WM_COMMAND, IDC_EDIT_MARKER, 0);
@@ -796,6 +809,7 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 			if ((pHdr->code == LVN_KEYDOWN) && (((NMLVKEYDOWN *)pHdr)->wVKey == VK_DELETE)) SendMessage(hwndDlg, WM_COMMAND, IDC_DELETE_MARKER, 0);
 			if ((pHdr->code == LVN_KEYDOWN) && (((NMLVKEYDOWN *)pHdr)->wVKey == VK_RETURN)) SendMessage(hwndDlg, WM_COMMAND, IDC_EDIT_MARKER, 0);
 		}
+#endif
 	}; break;
 
 	case WM_COMMAND: {
@@ -865,7 +879,8 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 bool editMarkersHookCommandProc(int command, int flag) {
 	if (editMarkersRegisteredCommand && (command == editMarkersRegisteredCommand)) {
 		if (hEditMarkersDlg == NULL) {
-			CreateDialog(globalHInstance, MAKEINTRESOURCE(IDD_EDITMARKERS), hParentWnd, editMarkersDlgProc);
+			HWND h = CreateDialog(globalHInstance, MAKEINTRESOURCE(IDD_EDITMARKERS), hParentWnd, editMarkersDlgProc);
+                        if (h) ShowWindow(h,SW_SHOW);
 		}
 		else DestroyWindow(hEditMarkersDlg);
 
