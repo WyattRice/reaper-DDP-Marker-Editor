@@ -10,7 +10,6 @@
 #include "resource.h"
 #include "cdtext.h"
 #define REAPERAPI_IMPLEMENT
-#include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
 #include "../WDL/wdltypes.h"
 #include "../WDL/wdlstring.h"
@@ -179,7 +178,7 @@ int markerColumnWidthList[NUM_MARKER_COLUMNS] = {
 
 void writePrivateProfileInt(char *section, char *key, int value, char *configFileName) {
 	char valueStr[32];
-	snprintf(valueStr,sizeof(valueStr),"%d",value);
+	snprintf(valueStr, sizeof(valueStr), "%d", value);
 	WritePrivateProfileString(section, key, valueStr, configFileName);
 }
 
@@ -403,15 +402,14 @@ void updateMarkerList(HWND hListWnd) {
 
 
 void markerOperation(char operation, char *message, WDL_FastString *ppText, bool *pIsUndoBlock, bool *pDoRetry, int markerID, int markerIndex, double position, const char *name) {
-	char text[256];
 	if (!*pIsUndoBlock) Undo_BeginBlock();
 	*pIsUndoBlock = true;
 	switch (operation) {
-		case 's': SetProjectMarker(markerID, false, position, 0, name); break;
-		case 'a': AddProjectMarker(NULL, false, 0, 0, name, -1); break;
-		case 'd': DeleteProjectMarker(NULL, markerID, false); break;
+	case 's': SetProjectMarker(markerID, false, position, 0, name); break;
+	case 'a': AddProjectMarker(NULL, false, 0, 0, name, -1); break;
+	case 'd': DeleteProjectMarker(NULL, markerID, false); break;
 	}
-        ppText->AppendFormatted(256,message,markerID);
+	ppText->AppendFormatted(256, message, markerID);
 	*pDoRetry = true;
 }
 
@@ -424,8 +422,8 @@ void correctMarkers(WDL_FastString *ppText) {
 	bool isZeroIndex0 = false;
 	bool isUndoBlock = false;
 	bool doRetry = false;
-        int retry_count = 0;
-        const int max_retry = 2000;
+	int retry_count = 0;
+	const int max_retry = 2000;
 
 	do {
 		double currIndex0Position = -1;
@@ -519,7 +517,7 @@ void correctMarkers(WDL_FastString *ppText) {
 	if (ppText->GetLength() == 0) {
 		ppText->Append("No modifications needed. All the markers were OK.\r\n\r\n");
 	}
-        if (retry_count > max_retry)
+	if (retry_count > max_retry)
 	{
 		ppText->Append("\r\nAborted -- after too many corrections made, bug?\r\n\r\n");
 	}
@@ -559,7 +557,6 @@ WDL_DLGRET correctMarkersDlgProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM 
 	}; break;
 	}
 	return 0;
-	UpdateTimeline();
 }
 
 
@@ -570,8 +567,8 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 	switch (uMsg) {
 	case WM_INITDIALOG: {
 		SetWindowLongPtr(hwndDlg, GWLP_USERDATA, lParam);
-		int itemIndex = (int) (lParam & 0x00FFFFFF);
-		char markerType = (char) ((lParam >> 24)&0xff);
+		int itemIndex = (int)(lParam & 0x00FFFFFF);
+		char markerType = (char)((lParam >> 24) & 0xff);
 		MarkerData *pMarkerData = (pMarkerList && (itemIndex >= 0) && (itemIndex < numMarkers)) ? pMarkerList + itemIndex : NULL;
 
 		for (int genreIndex = 1; genreIndex <= NUM_CDTEXT_GENRES; genreIndex++) {
@@ -624,41 +621,23 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 		if (LOWORD(wParam) == IDCANCEL) EndDialog(hwndDlg, IDCANCEL);
 		else if (LOWORD(wParam) == IDOK) {
 			LPARAM lParam = GetWindowLongPtr(hwndDlg, GWLP_USERDATA);
-			int itemIndex = (int) (lParam & 0x00FFFFFF);
-			int markerID = 0;
-			char markerType = (char) ((lParam >> 24)&0xff);
+			int itemIndex = (int)(lParam & 0x00FFFFFF);
+			int markerID = -1;
+			char markerType = lParam >> 24;
 			char name[4096];
 			name[0] = markerType;
 			name[1] = '\0';
-			if (markerType == '!')
-			{
-				if (itemIndex >= numMarkers) markerID = AddProjectMarker(NULL, false, 0, 0, name, 0);
-				else markerID = pMarkerList[itemIndex].ID;
 
-				int min = GetDlgItemInt(hwndDlg, 200, NULL, 0);
-				int sec = GetDlgItemInt(hwndDlg, 201, NULL, 0);
-				int frame = GetDlgItemInt(hwndDlg, 202, NULL, 0);
-				if (min > 99) min = 99;
-				if (sec > 59) sec = 59;
-				if (frame > 74) frame = 74;
-				double pos = min * 60 + sec + frame / 75.0;
-			}
-			else
-				if (markerType == '#' || '@')
-					if (itemIndex >= numMarkers) markerID = AddProjectMarker(NULL, false, 0, 0, name, -1);
-					else markerID = pMarkerList[itemIndex].ID;
+			if (itemIndex >= numMarkers) markerID = AddProjectMarker(NULL, false, 0, 0, name, -1);
+			else markerID = pMarkerList[itemIndex].ID;
 
-					int min = GetDlgItemInt(hwndDlg, 200, NULL, 0);
-					int sec = GetDlgItemInt(hwndDlg, 201, NULL, 0);
-					int frame = GetDlgItemInt(hwndDlg, 202, NULL, 0);
-					if (min > 99) min = 99;
-					if (sec > 59) sec = 59;
-					if (frame > 74) frame = 74;
-					double pos = min * 60 + sec + frame / 75.0;
-
-
-		
-
+			int min = GetDlgItemInt(hwndDlg, 200, NULL, 0);
+			int sec = GetDlgItemInt(hwndDlg, 201, NULL, 0);
+			int frame = GetDlgItemInt(hwndDlg, 202, NULL, 0);
+			if (min > 99) min = 99;
+			if (sec > 59) sec = 59;
+			if (frame > 74) frame = 74;
+			double pos = min * 60 + sec + frame / 75.0;
 
 			int nameOfs = 1;
 			if ((markerType == '@') || (markerType == '#')) {
@@ -681,7 +660,7 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 				appendMarkerName(name, sizeof(name), &nameOfs, "ISRC", valueText);
 			}
 
-			Undo_BeginBlock();
+			Undo_BeginBlock;
 			SetProjectMarker(markerID, false, pos, 0, name);
 			Undo_EndBlock("Edit marker", UNDO_STATE_MISCCFG);
 			updateMarkerList(hMarkerListWnd);
@@ -701,7 +680,7 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 
 		hEditMarkersDlg = hwndDlg;
 		CheckMenuItem(hEditMenu, editMarkersRegisteredCommand, MF_CHECKED);
-		hMarkerListWnd = GetDlgItem(hwndDlg,IDC_MARKERS_LIST);
+		hMarkerListWnd = GetDlgItem(hwndDlg, IDC_MARKERS_LIST);
 
 #ifdef _WIN32
 		ListView_SetExtendedListViewStyle(hEditMarkersDlg, LVS_EX_FULLROWSELECT);
@@ -736,8 +715,8 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 	}; return 0;
 
 	case WM_SIZE: {
-                RECT r;
-                GetClientRect(hwndDlg,&r);
+		RECT r;
+		GetClientRect(hwndDlg, &r);
 		int w = r.right;
 		int h = r.bottom;
 		MoveWindow(hMarkerListWnd, 3, 3, w - 6, h - 25 - 6 - 6, true);
@@ -856,8 +835,8 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 	};
 
 	case WM_CLOSE:
-          DestroyWindow(hwndDlg);
-        return 0;
+		DestroyWindow(hwndDlg);
+		return 0;
 	case WM_DESTROY: {
 		if (hEditMarkersDlg) saveConfiguration();
 		KillTimer(hwndDlg, 1);
@@ -874,7 +853,7 @@ bool editMarkersHookCommandProc(int command, int flag) {
 	if (editMarkersRegisteredCommand && (command == editMarkersRegisteredCommand)) {
 		if (hEditMarkersDlg == NULL) {
 			HWND h = CreateDialog(globalHInstance, MAKEINTRESOURCE(IDD_EDITMARKERS), hParentWnd, editMarkersDlgProc);
-                        if (h) ShowWindow(h,SW_SHOW);
+			if (h) ShowWindow(h, SW_SHOW);
 		}
 		else DestroyWindow(hEditMarkersDlg);
 
@@ -928,7 +907,7 @@ extern "C" {
 			//		mi.dwTypeData = (char *)editMarkersAction;
 			//		mi.wID = editMarkersRegisteredCommand;
 			//		InsertMenuItem(hEditMenu, editMarkersMenuPos, 1, &mi);
-	
+
 		return 1;
 	}
 };
