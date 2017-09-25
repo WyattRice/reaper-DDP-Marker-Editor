@@ -419,9 +419,9 @@ void markerOperation(char operation, char *message, char **ppText, int *pTextOfs
 	if (!*pIsUndoBlock) Undo_BeginBlock();
 	*pIsUndoBlock = true;
 	switch (operation) {
-		case 's': SetProjectMarker(markerIndex, false, position, 0, name); break;
+		case 's': SetProjectMarker(markerID, false, position, 0, name); break;
 		case 'a': AddProjectMarker(NULL, false, 0, 0, name, -1); break;
-		case 'd': DeleteProjectMarker(NULL, markerIndex, false); break;
+		case 'd': DeleteProjectMarker(NULL, markerID, false); break;
 	}
 	sprintf(text, message, markerID);
 	*pTextOfs += appendString(ppText, *pTextOfs, text);
