@@ -437,6 +437,8 @@ void correctMarkers(char **ppText, int *pTextOfs) {
 	bool isZeroIndex0 = false;
 	bool isUndoBlock = false;
 	bool doRetry = false;
+        int retry_count = 0;
+        const int max_retry = 2000;
 
 	do {
 		double currIndex0Position = -1;
@@ -447,6 +449,7 @@ void correctMarkers(char **ppText, int *pTextOfs) {
 		int prevIndex0MarkerID = -1;
 		int prevIndex0MarkerSerial = -1;
 		doRetry = false;
+		if (++retry_count > max_retry) break;
 
 		int markerSerial = 0;
 		while ((markerSerial = EnumProjectMarkers(markerSerial, &markerIsRegion, &markerPosition, &markerRegionEnd, &markerName, &markerID)) != 0) {
@@ -528,6 +531,10 @@ void correctMarkers(char **ppText, int *pTextOfs) {
 
 	if (*ppText == NULL) {
 		*pTextOfs += appendString(ppText, *pTextOfs, "No modifications needed. All the markers were OK.\r\n\r\n");
+	}
+        if (retry_count > max_retry)
+	{
+		*pTextOfs += appendString(ppText, *pTextOfs, "\r\nAborted -- after too many corrections made, bug?\r\n\r\n");
 	}
 
 	if (isUndoBlock) Undo_EndBlock("Correct markers", UNDO_STATE_MISCCFG);
