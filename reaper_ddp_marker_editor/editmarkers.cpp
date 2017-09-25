@@ -13,6 +13,7 @@
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
 #include "../WDL/wdltypes.h"
+#include "../WDL/wdlstring.h"
 HINSTANCE globalHInstance;
 reaper_plugin_info_t* g_plugin_info = nullptr;
 REAPER_PLUGIN_HINSTANCE g_hInst; // handle to the dll instance. could be useful for making win32 API calls
@@ -174,19 +175,6 @@ int markerColumnWidthList[NUM_MARKER_COLUMNS] = {
 };
 
 
-
-int appendString(char **ppDestString, int ofs, char *pSrcString) {
-	if (ppDestString == NULL) return 0;
-	if (pSrcString == NULL) return 0;
-	int len = (int)strlen(pSrcString);
-	if (len == 0) return 0;
-	if (ofs < 0) ofs = *ppDestString ? (int)strlen(*ppDestString) : 0;
-	char *pTempString = (char *)realloc(*ppDestString, (ofs + len + 1) * sizeof(char));
-	if (pTempString == NULL) return 0;
-	memcpy(pTempString + ofs, pSrcString, len + 1);
-	*ppDestString = pTempString;
-	return len;
-}
 
 
 void writePrivateProfileInt(char *section, char *key, int value, char *configFileName) {
@@ -414,7 +402,7 @@ void updateMarkerList(HWND hListWnd) {
 }
 
 
-void markerOperation(char operation, char *message, char **ppText, int *pTextOfs, bool *pIsUndoBlock, bool *pDoRetry, int markerID, int markerIndex, double position, const char *name) {
+void markerOperation(char operation, char *message, WDL_FastString *ppText, bool *pIsUndoBlock, bool *pDoRetry, int markerID, int markerIndex, double position, const char *name) {
 	char text[256];
 	if (!*pIsUndoBlock) Undo_BeginBlock();
 	*pIsUndoBlock = true;
@@ -423,13 +411,12 @@ void markerOperation(char operation, char *message, char **ppText, int *pTextOfs
 		case 'a': AddProjectMarker(NULL, false, 0, 0, name, -1); break;
 		case 'd': DeleteProjectMarker(NULL, markerID, false); break;
 	}
-	sprintf(text, message, markerID);
-	*pTextOfs += appendString(ppText, *pTextOfs, text);
+        ppText->AppendFormatted(256,message,markerID);
 	*pDoRetry = true;
 }
 
 
-void correctMarkers(char **ppText, int *pTextOfs) {
+void correctMarkers(WDL_FastString *ppText) {
 	int markerID = 0;
 	bool markerIsRegion;
 	double markerPosition, markerRegionEnd;
@@ -458,7 +445,7 @@ void correctMarkers(char **ppText, int *pTextOfs) {
 				double time = ceil(markerPosition * 75.0 - 1e-9) / 75.0;
 
 				if ((time <= markerPosition - 0.000001) || (time >= markerPosition + 0.000001)) {
-					markerOperation('s', "Marker %d was aligned to CD frame.\r\n\r\n", ppText, pTextOfs, &isUndoBlock, &doRetry, markerID, markerSerial, time, markerName);
+					markerOperation('s', "Marker %d was aligned to CD frame.\r\n\r\n", ppText, &isUndoBlock, &doRetry, markerID, markerSerial, time, markerName);
 					markerPosition = time;
 					break; // must restart
 				}
@@ -470,22 +457,22 @@ void correctMarkers(char **ppText, int *pTextOfs) {
 					}
 					if ((markerPosition > 0) && (markerPosition < 2)) {
 						markerOperation('d', "INDEX0 marker %d was deleted, as it was at more than 0 and less than 2 seconds.\r\n\r\n",
-							ppText, pTextOfs, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition, markerName);
+							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition, markerName);
 						break; // must restart
 					}
 					if (markerPosition == currIndex0Position) {
 						markerOperation('s', "INDEX0 marker %d was advanced forward by 1 frame,\r\nas it was overlapping with the previous INDEX0.\r\n\r\n",
-							ppText, pTextOfs, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
+							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
 						break; // must restart
 					}
 					if (markerPosition == currIndex1Position) {
 						markerOperation('s', "INDEX0 marker %d was advanced forward by 1 frame,\r\nas it was overlapping with the previous INDEX1.\r\n\r\n",
-							ppText, pTextOfs, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
+							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
 						break; // must restart
 					}
 					if (prevIndex0MarkerID >= 0) {
 						markerOperation('d', "INDEX0 marker %d was deleted, as only the last INDEX0 marker before INDEX1 can be used.\r\n\r\n",
-							ppText, pTextOfs, &isUndoBlock, &doRetry, prevIndex0MarkerID, prevIndex0MarkerSerial, markerPosition, markerName);
+							ppText, &isUndoBlock, &doRetry, prevIndex0MarkerID, prevIndex0MarkerSerial, markerPosition, markerName);
 						break; // must restart
 					}
 
@@ -497,24 +484,24 @@ void correctMarkers(char **ppText, int *pTextOfs) {
 					if (isFirstIndex1) {
 						if (markerPosition < 2) {
 							markerOperation('s', "First INDEX1 marker %d was advanced forward to 00:02:00.\r\n\r\n",
-								ppText, pTextOfs, &isUndoBlock, &doRetry, markerID, markerSerial, 2, markerName);
+								ppText, &isUndoBlock, &doRetry, markerID, markerSerial, 2, markerName);
 							break; // must restart
 						}
 						isFirstIndex1 = false;
 					}
 					else if (markerPosition < currIndex1Position + 4) {
 						markerOperation('s', "INDEX1 marker %d was advanced forward by 4 seconds from the previous INDEX1,\r\nas the track length was shorter than 4 seconds.\r\n\r\n",
-							ppText, pTextOfs, &isUndoBlock, &doRetry, markerID, markerSerial, currIndex1Position + 4, markerName);
+							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, currIndex1Position + 4, markerName);
 						break; // must restart
 					}
 					if (markerPosition == currIndex0Position) {
 						markerOperation('s', "INDEX1 marker %d was advanced forward by 1 frame,\r\nas it was overlapping with the previous INDEX0.\r\n\r\n",
-							ppText, pTextOfs, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
+							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
 						break; // must restart
 					}
 					if (markerPosition == currIndex1Position) {
 						markerOperation('s', "INDEX1 marker %d was advanced forward by 1 frame,\r\nas it was overlapping with the previous INDEX1.\r\n\r\n",
-							ppText, pTextOfs, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
+							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
 						break; // must restart
 					}
 					currIndex1Position = markerPosition;
@@ -526,15 +513,15 @@ void correctMarkers(char **ppText, int *pTextOfs) {
 	} while (doRetry);
 
 	if (!isZeroIndex0) {
-		markerOperation('a', "INDEX0 added at 00:00:00\r\n\r\n", ppText, pTextOfs, &isUndoBlock, &doRetry, -1, -1, 0, "!");
+		markerOperation('a', "INDEX0 added at 00:00:00\r\n\r\n", ppText, &isUndoBlock, &doRetry, -1, -1, 0, "!");
 	}
 
-	if (*ppText == NULL) {
-		*pTextOfs += appendString(ppText, *pTextOfs, "No modifications needed. All the markers were OK.\r\n\r\n");
+	if (ppText->GetLength() == 0) {
+		ppText->Append("No modifications needed. All the markers were OK.\r\n\r\n");
 	}
         if (retry_count > max_retry)
 	{
-		*pTextOfs += appendString(ppText, *pTextOfs, "\r\nAborted -- after too many corrections made, bug?\r\n\r\n");
+		ppText->Append("\r\nAborted -- after too many corrections made, bug?\r\n\r\n");
 	}
 
 	if (isUndoBlock) Undo_EndBlock("Correct markers", UNDO_STATE_MISCCFG);
@@ -557,14 +544,12 @@ void appendMarkerName(char *name, int nameSize, int *nameOfs, char *key, char *v
 WDL_DLGRET correctMarkersDlgProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	switch (uMsg) {
 	case WM_INITDIALOG: {
-		char *text = NULL;
-		int textOfs = 0;
 
-		correctMarkers(&text, &textOfs);
+		WDL_FastString text;
+		correctMarkers(&text);
 
-		if (text) {
-			SetDlgItemText(hWndDlg, IDC_MARKER_CORRECTIONS_TEXT, text);
-			free(text);
+		if (text.GetLength()) {
+			SetDlgItemText(hWndDlg, IDC_MARKER_CORRECTIONS_TEXT, text.Get());
 		}
 	}; return 0;
 
