@@ -660,7 +660,7 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 				appendMarkerName(name, sizeof(name), &nameOfs, "ISRC", valueText);
 			}
 
-			Undo_BeginBlock;
+			Undo_BeginBlock();
 			SetProjectMarker(markerID, false, pos, 0, name);
 			Undo_EndBlock("Edit marker", UNDO_STATE_MISCCFG);
 			updateMarkerList(hMarkerListWnd);
