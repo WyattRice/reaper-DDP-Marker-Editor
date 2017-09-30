@@ -622,14 +622,10 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 		else if (LOWORD(wParam) == IDOK) {
 			LPARAM lParam = GetWindowLongPtr(hwndDlg, GWLP_USERDATA);
 			int itemIndex = (int)(lParam & 0x00FFFFFF);
-			int markerID = -1;
 			char markerType = lParam >> 24;
 			char name[4096];
 			name[0] = markerType;
 			name[1] = '\0';
-
-			if (itemIndex >= numMarkers) markerID = AddProjectMarker(NULL, false, 0, 0, name, -1);
-			else markerID = pMarkerList[itemIndex].ID;
 
 			int min = GetDlgItemInt(hwndDlg, 200, NULL, 0);
 			int sec = GetDlgItemInt(hwndDlg, 201, NULL, 0);
@@ -661,8 +657,20 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 			}
 
 			Undo_BeginBlock();
-			SetProjectMarker(markerID, false, pos, 0, name);
-			Undo_EndBlock("Edit marker", UNDO_STATE_MISCCFG);
+			const char *msg;
+			if (itemIndex >= numMarkers) 
+			{
+				AddProjectMarker(NULL, false, pos, 0, name, -1);
+				msg = "Add marker";
+			}
+			else
+			{
+				int markerID = pMarkerList[itemIndex].ID;
+				SetProjectMarker(markerID, false, pos, 0, name);
+				msg = "Edit marker";
+			}
+
+			Undo_EndBlock(msg, UNDO_STATE_MISCCFG);
 			updateMarkerList(hMarkerListWnd);
 
 			EndDialog(hwndDlg, IDOK);
