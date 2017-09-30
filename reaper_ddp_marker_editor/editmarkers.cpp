@@ -569,6 +569,12 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 		SetWindowLongPtr(hwndDlg, GWLP_USERDATA, lParam);
 		int itemIndex = (int)(lParam & 0x00FFFFFF);
 		char markerType = (char)((lParam >> 24) & 0xff);
+		if (itemIndex == 0xFFFFFF) 
+		{
+			if (markerType == '@') SetWindowText(hwndDlg,"Insert album marker");
+			else if (markerType == '#') SetWindowText(hwndDlg,"Insert INDEX1 marker");
+			else if (markerType == '!') SetWindowText(hwndDlg,"Insert INDEX0 marker");
+		}
 		MarkerData *pMarkerData = (pMarkerList && (itemIndex >= 0) && (itemIndex < numMarkers)) ? pMarkerList + itemIndex : NULL;
 
 		for (int genreIndex = 1; genreIndex <= NUM_CDTEXT_GENRES; genreIndex++) {
