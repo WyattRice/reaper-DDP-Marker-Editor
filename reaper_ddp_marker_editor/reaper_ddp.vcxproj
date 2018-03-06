@@ -130,6 +130,7 @@
     <ResourceCompile Include="res.rc" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\WDL\win32_utf8.c" />
     <ClCompile Include="editmarkers.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

@@ -13,6 +13,7 @@
 #include "reaper_plugin_functions.h"
 #include "../WDL/wdltypes.h"
 #include "../WDL/wdlstring.h"
+#include "../WDL/win32_utf8.h"
 HINSTANCE globalHInstance;
 reaper_plugin_info_t* g_plugin_info = nullptr;
 REAPER_PLUGIN_HINSTANCE g_hInst; // handle to the dll instance. could be useful for making win32 API calls
@@ -688,6 +689,7 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 
 
 WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+	static int s_ignore_listview_messages;
 	switch (uMsg) {
 	case WM_INITDIALOG: {
 		LVCOLUMN lvc;
@@ -697,7 +699,8 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 		hMarkerListWnd = GetDlgItem(hwndDlg, IDC_MARKERS_LIST);
 
 #ifdef _WIN32
-		ListView_SetExtendedListViewStyle(hEditMarkersDlg, LVS_EX_FULLROWSELECT);
+		WDL_UTF8_HookListView(hMarkerListWnd);
+		ListView_SetExtendedListViewStyle(hMarkerListWnd, LVS_EX_FULLROWSELECT);
 #endif
 
 		lvc.mask = LVCF_WIDTH | LVCF_TEXT;
@@ -720,7 +723,9 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 		if (editPosition != lastEditPosition) {
 			for (int i = 0; i < numMarkers; i++) {
 				if (pMarkerList[i].position == editPosition) {
+					s_ignore_listview_messages++;
 					ListView_SetItemState(hMarkerListWnd, i, LVIS_SELECTED, LVIS_SELECTED);
+					s_ignore_listview_messages--;
 					break;
 				}
 			}
@@ -744,8 +749,9 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 		NMHDR *pHdr = (NMHDR *)lParam;
 		if (pHdr->code == LVN_ITEMCHANGED) {
 			NMLISTVIEW *pListData = (NMLISTVIEW *)pHdr;
-			if ((pListData->iItem >= 0) && (pListData->iItem < numMarkers)) {
-				SetEditCurPos(pMarkerList[pListData->iItem].position, true, false);
+			if ((pListData->uNewState & LVIS_SELECTED) && (pListData->iItem >= 0) && (pListData->iItem < numMarkers)) {
+				if (!s_ignore_listview_messages)
+					SetEditCurPos(pMarkerList[pListData->iItem].position, true, false);
 			}
 		}
 
