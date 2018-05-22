@@ -9,13 +9,14 @@
 #include <math.h>
 #include "resource.h"
 #include "cdtext.h"
+
 #define REAPERAPI_IMPLEMENT
 #include "reaper_plugin_functions.h"
 #include "../WDL/wdltypes.h"
 #include "../WDL/wdlstring.h"
 #include "../WDL/win32_utf8.h"
-HINSTANCE globalHInstance;
-reaper_plugin_info_t* g_plugin_info = nullptr;
+
+reaper_plugin_info_t* g_plugin_info = NULL;
 REAPER_PLUGIN_HINSTANCE g_hInst; // handle to the dll instance. could be useful for making win32 API calls
 HWND g_parent; // global variable that holds the handle to the Reaper main window, useful for various win32 API calls
 
@@ -27,7 +28,8 @@ HWND g_parent; // global variable that holds the handle to the Reaper main windo
 
 
 #define MARKERS_INI_SECTION			"DDP marker editor"
-
+#define SEEK_PLAY_INI_SECTION		"Seek play"
+#define SEEK_PLAY_KEY				"Seek Play"
 #define MARKER_COL_TIME				0
 #define MARKER_COL_TYPE				1
 #define MARKER_COL_ISRC				2
@@ -50,6 +52,8 @@ typedef struct {
 	char *name;
 	char type; // !, # or @
 } MarkerData;
+
+bool m_bPlayOnSel;
 
 void prepareTimeString(char *buffer, double time, char *separator) {
 	if (separator == NULL) separator = "";
@@ -177,7 +181,7 @@ int markerColumnWidthList[NUM_MARKER_COLUMNS] = {
 
 
 
-void writePrivateProfileInt(char *section, char *key, int value, char *configFileName) {
+void writePrivateProfileInt(const char *section, const char *key, int value, const char *configFileName) {
 	char valueStr[32];
 	snprintf(valueStr, sizeof(valueStr), "%d", value);
 	WritePrivateProfileString(section, key, valueStr, configFileName);
@@ -185,8 +189,10 @@ void writePrivateProfileInt(char *section, char *key, int value, char *configFil
 
 
 void loadConfiguration(void) {
-	if (get_ini_file() == NULL) return;
-	char *configFileName = (char *)get_ini_file();
+	if (GetResourcePath() == NULL) return;
+	char configFileName[1024];
+	const char* inifilepath = GetResourcePath();
+	sprintf(configFileName, "%s//ddpEdit.ini", inifilepath);
 	int winX = GetPrivateProfileInt(MARKERS_INI_SECTION, "x", -1000, configFileName);
 	int winY = GetPrivateProfileInt(MARKERS_INI_SECTION, "y", -1000, configFileName);
 	int winW = GetPrivateProfileInt(MARKERS_INI_SECTION, "w", 640, configFileName);
@@ -197,21 +203,30 @@ void loadConfiguration(void) {
 	if (winY < 0) winY = (GetSystemMetrics(SM_CYSCREEN) - winH) >> 1;
 	MoveWindow(hEditMarkersDlg, winX, winY, winW, winH, 1);
 
-	LVCOLUMN lvc;
-	lvc.mask = LVCF_WIDTH;
-	for (int colIndex = 0; colIndex < NUM_MARKER_COLUMNS; colIndex++) {
+	//LVCOLUMN lvc;
+	//lvc.mask = LVCF_WIDTH;
+	int order[NUM_MARKER_COLUMNS];
+	for (int colIndex = 0; colIndex < NUM_MARKER_COLUMNS; ++colIndex) {
 		char key[32];
+
 		sprintf(key, "col%d", colIndex);
-		lvc.iSubItem = colIndex;
-		lvc.cx = GetPrivateProfileInt(MARKERS_INI_SECTION, key, markerColumnWidthList[colIndex], configFileName);
-		ListView_SetColumn(hMarkerListWnd, colIndex, &lvc);
+		const int width = GetPrivateProfileInt(MARKERS_INI_SECTION, key,
+			markerColumnWidthList[colIndex], configFileName);
+		ListView_SetColumnWidth(hMarkerListWnd, colIndex, width);
+
+		sprintf(key, "order%d", colIndex);
+		order[colIndex] = GetPrivateProfileInt(MARKERS_INI_SECTION, key, colIndex, configFileName);
 	}
+
+	ListView_SetColumnOrderArray(hMarkerListWnd, NUM_MARKER_COLUMNS, order);
 }
 
 
 void saveConfiguration(void) {
-	if (get_ini_file() == NULL) return;
-	char *configFileName = (char *)get_ini_file();
+	if (GetResourcePath() == NULL) return;
+	char configFileName[1024];
+	const char* inifilepath = GetResourcePath();
+	sprintf(configFileName, "%s//ddpEdit.ini", inifilepath);
 	RECT R;
 	GetWindowRect(hEditMarkersDlg, &R);
 	writePrivateProfileInt(MARKERS_INI_SECTION, "x", R.left, configFileName);
@@ -224,6 +239,13 @@ void saveConfiguration(void) {
 		char key[32];
 		sprintf(key, "col%d", colIndex);
 		writePrivateProfileInt(MARKERS_INI_SECTION, key, cx, configFileName);
+	}
+	for (int colIndex = 0; colIndex < NUM_MARKER_COLUMNS; colIndex++) {
+		int order[NUM_MARKER_COLUMNS];
+		ListView_GetColumnOrderArray(hMarkerListWnd, NUM_MARKER_COLUMNS, order);
+		char key[32];
+		sprintf(key, "order%d", colIndex);
+		writePrivateProfileInt(MARKERS_INI_SECTION, key, order[colIndex], configFileName);
 	}
 }
 
@@ -402,130 +424,6 @@ void updateMarkerList(HWND hListWnd) {
 }
 
 
-void markerOperation(char operation, char *message, WDL_FastString *ppText, bool *pIsUndoBlock, bool *pDoRetry, int markerID, int markerIndex, double position, const char *name) {
-	if (!*pIsUndoBlock) Undo_BeginBlock();
-	*pIsUndoBlock = true;
-	switch (operation) {
-	case 's': SetProjectMarker(markerID, false, position, 0, name); break;
-	case 'a': AddProjectMarker(NULL, false, 0, 0, name, -1); break;
-	case 'd': DeleteProjectMarker(NULL, markerID, false); break;
-	}
-	ppText->AppendFormatted(256, message, markerID);
-	*pDoRetry = true;
-}
-
-
-void correctMarkers(WDL_FastString *ppText) {
-	int markerID = 0;
-	bool markerIsRegion;
-	double markerPosition, markerRegionEnd;
-	const char *markerName;
-	bool isZeroIndex0 = false;
-	bool isUndoBlock = false;
-	bool doRetry = false;
-	int retry_count = 0;
-	const int max_retry = 2000;
-
-	do {
-		double currIndex0Position = -1;
-		double currIndex1Position = -1;
-		double trackLength = 0;
-		bool isFirstIndex0 = true;
-		bool isFirstIndex1 = true;
-		int prevIndex0MarkerID = -1;
-		int prevIndex0MarkerSerial = -1;
-		doRetry = false;
-		if (++retry_count > max_retry) break;
-
-		int markerSerial = 0;
-		while ((markerSerial = EnumProjectMarkers(markerSerial, &markerIsRegion, &markerPosition, &markerRegionEnd, &markerName, &markerID)) != 0) {
-			char markerType = markerName[0];
-			if (!markerIsRegion && ((markerType == '!') || (markerType == '#'))) {
-				double time = ceil(markerPosition * 75.0 - 1e-9) / 75.0;
-
-				if ((time <= markerPosition - 0.000001) || (time >= markerPosition + 0.000001)) {
-					markerOperation('s', "Marker %d was aligned to CD frame.\r\n\r\n", ppText, &isUndoBlock, &doRetry, markerID, markerSerial, time, markerName);
-					markerPosition = time;
-					break; // must restart
-				}
-
-				if (markerType == '!') {
-					if (isFirstIndex0) {
-						if (markerPosition == 0.0) isZeroIndex0 = true;
-						isFirstIndex0 = false;
-					}
-					if ((markerPosition > 0) && (markerPosition < 2)) {
-						markerOperation('d', "INDEX0 marker %d was deleted, as it was at more than 0 and less than 2 seconds.\r\n\r\n",
-							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition, markerName);
-						break; // must restart
-					}
-					if (markerPosition == currIndex0Position) {
-						markerOperation('s', "INDEX0 marker %d was advanced forward by 1 frame,\r\nas it was overlapping with the previous INDEX0.\r\n\r\n",
-							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
-						break; // must restart
-					}
-					if (markerPosition == currIndex1Position) {
-						markerOperation('s', "INDEX0 marker %d was advanced forward by 1 frame,\r\nas it was overlapping with the previous INDEX1.\r\n\r\n",
-							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
-						break; // must restart
-					}
-					if (prevIndex0MarkerID >= 0) {
-						markerOperation('d', "INDEX0 marker %d was deleted, as only the last INDEX0 marker before INDEX1 can be used.\r\n\r\n",
-							ppText, &isUndoBlock, &doRetry, prevIndex0MarkerID, prevIndex0MarkerSerial, markerPosition, markerName);
-						break; // must restart
-					}
-
-					currIndex0Position = markerPosition;
-					prevIndex0MarkerID = markerID;
-					prevIndex0MarkerSerial = markerSerial;
-				}
-				else if (markerType == '#') {
-					if (isFirstIndex1) {
-						if (markerPosition < 2) {
-							markerOperation('s', "First INDEX1 marker %d was advanced forward to 00:02:00.\r\n\r\n",
-								ppText, &isUndoBlock, &doRetry, markerID, markerSerial, 2, markerName);
-							break; // must restart
-						}
-						isFirstIndex1 = false;
-					}
-					else if (markerPosition < currIndex1Position + 4) {
-						markerOperation('s', "INDEX1 marker %d was advanced forward by 4 seconds from the previous INDEX1,\r\nas the track length was shorter than 4 seconds.\r\n\r\n",
-							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, currIndex1Position + 4, markerName);
-						break; // must restart
-					}
-					if (markerPosition == currIndex0Position) {
-						markerOperation('s', "INDEX1 marker %d was advanced forward by 1 frame,\r\nas it was overlapping with the previous INDEX0.\r\n\r\n",
-							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
-						break; // must restart
-					}
-					if (markerPosition == currIndex1Position) {
-						markerOperation('s', "INDEX1 marker %d was advanced forward by 1 frame,\r\nas it was overlapping with the previous INDEX1.\r\n\r\n",
-							ppText, &isUndoBlock, &doRetry, markerID, markerSerial, markerPosition + 1 / 75.0, markerName);
-						break; // must restart
-					}
-					currIndex1Position = markerPosition;
-					prevIndex0MarkerID = -1;
-					prevIndex0MarkerSerial = -1;
-				}
-			}
-		}
-	} while (doRetry);
-
-	if (!isZeroIndex0) {
-		markerOperation('a', "INDEX0 added at 00:00:00\r\n\r\n", ppText, &isUndoBlock, &doRetry, -1, -1, 0, "!");
-	}
-
-	if (ppText->GetLength() == 0) {
-		ppText->Append("No modifications needed. All the markers were OK.\r\n\r\n");
-	}
-	if (retry_count > max_retry)
-	{
-		ppText->Append("\r\nAborted -- after too many corrections made, bug?\r\n\r\n");
-	}
-
-	if (isUndoBlock) Undo_EndBlock("Correct markers", UNDO_STATE_MISCCFG);
-}
-
 void appendMarkerName(char *name, int nameSize, int *nameOfs, char *key, char *value) {
 	if (value[0]) {
 		if (*nameOfs > 1) strcat(name, "|");
@@ -540,28 +438,6 @@ void appendMarkerName(char *name, int nameSize, int *nameOfs, char *key, char *v
 }
 
 
-WDL_DLGRET correctMarkersDlgProc(HWND hWndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-	switch (uMsg) {
-	case WM_INITDIALOG: {
-
-		WDL_FastString text;
-		correctMarkers(&text);
-
-		if (text.GetLength()) {
-			SetDlgItemText(hWndDlg, IDC_MARKER_CORRECTIONS_TEXT, text.Get());
-		}
-	}; return 0;
-
-	case WM_COMMAND: {
-		SendDlgItemMessage(hWndDlg, IDC_MARKER_CORRECTIONS_TEXT, EM_SETSEL, 0, 0);
-		if (LOWORD(wParam) == IDCANCEL) EndDialog(hWndDlg, IDCANCEL);
-	}; break;
-	}
-	return 0;
-}
-
-
-
 WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
 	char valueText[1024];
 
@@ -570,11 +446,11 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 		SetWindowLongPtr(hwndDlg, GWLP_USERDATA, lParam);
 		int itemIndex = (int)(lParam & 0x00FFFFFF);
 		char markerType = (char)((lParam >> 24) & 0xff);
-		if (itemIndex == 0xFFFFFF) 
+		if (itemIndex == 0xFFFFFF)
 		{
-			if (markerType == '@') SetWindowText(hwndDlg,"Insert album marker");
-			else if (markerType == '#') SetWindowText(hwndDlg,"Insert INDEX1 marker");
-			else if (markerType == '!') SetWindowText(hwndDlg,"Insert INDEX0 marker");
+			if (markerType == '@') SetWindowText(hwndDlg, "Insert album marker");
+			else if (markerType == '#') SetWindowText(hwndDlg, "Insert INDEX1 marker");
+			else if (markerType == '!') SetWindowText(hwndDlg, "Insert INDEX0 marker");
 		}
 		MarkerData *pMarkerData = (pMarkerList && (itemIndex >= 0) && (itemIndex < numMarkers)) ? pMarkerList + itemIndex : NULL;
 
@@ -665,7 +541,7 @@ WDL_DLGRET editSingleMarkerDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARA
 
 			Undo_BeginBlock();
 			const char *msg;
-			if (itemIndex >= numMarkers) 
+			if (itemIndex >= numMarkers)
 			{
 				AddProjectMarker(NULL, false, pos, 0, name, -1);
 				msg = "Add marker";
@@ -696,22 +572,48 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 
 		hEditMarkersDlg = hwndDlg;
 		CheckMenuItem(hEditMenu, editMarkersRegisteredCommand, MF_CHECKED);
+		char cOptions[10];
+		char configFileName[1024];
+		const char* inifilepath = GetResourcePath();
+		sprintf(configFileName, "%s//ddpEdit.ini", inifilepath);
+		GetPrivateProfileString(SEEK_PLAY_INI_SECTION, SEEK_PLAY_KEY, "1 1", cOptions, 10, configFileName);
+		m_bPlayOnSel = (cOptions[0] == '1');
+		//m_bScroll = (cOptions[2] == '1');
+
+		CheckDlgButton(hwndDlg, IDC_PLAY, m_bPlayOnSel ? BST_CHECKED : BST_UNCHECKED);
+
+		//CheckDlgButton(hwndDlg, IDC_PLAY, m_bPlayOnSel ? BST_CHECKED : BST_UNCHECKED);
 		hMarkerListWnd = GetDlgItem(hwndDlg, IDC_MARKERS_LIST);
+		//From SWS Extensions Thanks!
+		int lvstyle = LVS_EX_FULLROWSELECT | LVS_EX_HEADERDRAGDROP;
+#ifdef _WIN32
+		lvstyle |= LVS_EX_DOUBLEBUFFER;
+#else
+		// note for osx: style can be overrided in SWS_DockWnd::WndProc() for optional grid line theming
+#endif
+		ListView_SetExtendedListViewStyleEx(hMarkerListWnd, lvstyle, lvstyle);
 
 #ifdef _WIN32
+		// Setup UTF-8 (see http://forum.cockos.com/showthread.php?t=101547)
 		WDL_UTF8_HookListView(hMarkerListWnd);
-		ListView_SetExtendedListViewStyle(hMarkerListWnd, LVS_EX_FULLROWSELECT);
+#if !defined(WDL_NO_SUPPORT_UTF8)
+#ifdef WDL_SUPPORT_WIN9X
+		if (GetVersion() < 0x80000000)
+#endif
+			SendMessage(hMarkerListWnd, LVM_SETUNICODEFORMAT, 1, 0);
+#endif
 #endif
 
 		lvc.mask = LVCF_WIDTH | LVCF_TEXT;
 		for (int colIndex = 0; colIndex < NUM_MARKER_COLUMNS; colIndex++) {
+			lvc.fmt = LVCFMT_LEFT;
 			lvc.pszText = markerColumnNameList[colIndex];
 			lvc.cx = markerColumnWidthList[colIndex];
 			ListView_InsertColumn(hMarkerListWnd, colIndex, &lvc);
 		}
 
 		updateMarkerList(hMarkerListWnd);
-		SetTimer(hwndDlg, 1, 1000, NULL);
+		SetTimer(hwndDlg, 0, 500, NULL);
 
 		loadConfiguration();
 	}; return 0;
@@ -741,15 +643,34 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 		MoveWindow(hMarkerListWnd, 3, 3, w - 6, h - 25 - 6 - 6, true);
 		int w2 = 200;
 		if (w2 > w - 100 - 6) w2 = w - 100 - 6;
-		MoveWindow(GetDlgItem(hwndDlg, IDC_CORRECT_MARKERS), 3, h - 25 - 3, w2, 25, true);
-		MoveWindow(GetDlgItem(hwndDlg, IDCANCEL), w - 100 - 3, h - 25 - 3, 100, 25, true);
+		MoveWindow(GetDlgItem(hwndDlg, IDC_PLAY_BUTTON), 3, h - 25 - 3, 80, 25, true);
+		MoveWindow(GetDlgItem(hwndDlg, IDC_PLAY), 90, h - 25 - 3, 70, 25, true);
+		MoveWindow(GetDlgItem(hwndDlg, IDCANCEL), w - 80 - 3, h - 25 - 3, 80, 25, true);
+
+		//InvalidateRect(hwndDlg, &r, false);
+		//UpdateWindow(hwndDlg);
+
 	}; return 0;
+
+	case WM_GETMINMAXINFO: {
+		MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+		mmi->ptMinTrackSize.x = 260; //width
+		mmi->ptMinTrackSize.y = 130; //height
+
+		return 0;
+	}
 
 	case WM_NOTIFY: {
 		NMHDR *pHdr = (NMHDR *)lParam;
 		if (pHdr->code == LVN_ITEMCHANGED) {
 			NMLISTVIEW *pListData = (NMLISTVIEW *)pHdr;
-			if ((pListData->uNewState & LVIS_SELECTED) && (pListData->iItem >= 0) && (pListData->iItem < numMarkers)) {
+#ifdef _WIN32
+			if ((pListData->uNewState & LVIS_SELECTED) && (pListData->iItem >= 0) && (pListData->iItem < numMarkers))
+#else
+			if ((pListData->iItem >= 0) && (pListData->iItem < numMarkers))
+#endif
+			{
+
 				if (!s_ignore_listview_messages)
 					SetEditCurPos(pMarkerList[pListData->iItem].position, true, false);
 			}
@@ -770,15 +691,30 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 		else if (pHdr->code == NM_DBLCLK) {
 			SendMessage(hwndDlg, WM_COMMAND, IDC_EDIT_MARKER, 0);
 		}
+		if (pHdr->code == NM_CLICK)
+		{
+			NMLISTVIEW *pListData = (NMLISTVIEW *)pHdr;
+			if ((pListData->iItem >= 0) && (pListData->iItem < numMarkers))
+			{
+				if (IsDlgButtonChecked(hwndDlg, IDC_PLAY) == BST_UNCHECKED)
+				{
+					SetEditCurPos(pMarkerList[pListData->iItem].position, true, false);
+				}
+				else
+					SetEditCurPos(pMarkerList[pListData->iItem].position, true, true);
+			}
 
+		}
 		else if (pHdr->code == NM_RCLICK) {
 			NMLISTVIEW *pListData = (NMLISTVIEW *)pHdr;
+			//NMLISTVIEW *pListData = (NMLISTVIEW *)pHdr;
 			int index = pListData->iItem;
 			if (index < 0) index = numMarkers;
 			if (index > numMarkers) index = numMarkers;
 
-			HMENU hCtxMenu = LoadMenu(globalHInstance, MAKEINTRESOURCE(IDM_EDITMARKERSMENU));
+			HMENU hCtxMenu = LoadMenu(g_hInst, MAKEINTRESOURCE(IDM_EDITMARKERSMENU));
 			if (hCtxMenu) {
+
 				HMENU hPopup = GetSubMenu(hCtxMenu, 0);
 				bool hasSingleSel = (ListView_GetSelectedCount(hMarkerListWnd) == 1);
 				EnableMenuItem(hPopup, IDC_EDIT_MARKER, MF_BYCOMMAND | (hasSingleSel ? MF_ENABLED : MF_DISABLED | MF_GRAYED));
@@ -804,11 +740,8 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 	}; break;
 
 	case WM_COMMAND: {
-		if (LOWORD(wParam) == IDC_CORRECT_MARKERS) {
-			DialogBoxParam(globalHInstance, MAKEINTRESOURCE(IDD_CORRECTMARKERS), hwndDlg, correctMarkersDlgProc, 0);
-		}
 
-		else if (LOWORD(wParam) == IDC_DELETE_MARKER) {
+		if (LOWORD(wParam) == IDC_DELETE_MARKER) {
 			if (ListView_GetSelectedCount(hMarkerListWnd) == 1) {
 				int selIndex = ListView_GetNextItem(hMarkerListWnd, -1, LVNI_SELECTED);
 				if ((selIndex >= 0) && (selIndex < numMarkers)) {
@@ -828,27 +761,31 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 				if ((selIndex >= 0) && (selIndex < numMarkers)) {
 					int lParam = pMarkerList[selIndex].type << 24;
 					if (pMarkerList[selIndex].type == '!') {
-						DialogBoxParam(globalHInstance, MAKEINTRESOURCE(IDD_EDITINDEX0MARKER), hwndDlg, editSingleMarkerDlgProc, lParam + (selIndex & 0x00FFFFFF));
+						DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_EDITINDEX0MARKER), hwndDlg, editSingleMarkerDlgProc, lParam + (selIndex & 0x00FFFFFF));
 					}
 					else if (pMarkerList[selIndex].type == '#') {
-						DialogBoxParam(globalHInstance, MAKEINTRESOURCE(IDD_EDITINDEX1MARKER), hwndDlg, editSingleMarkerDlgProc, lParam + (selIndex & 0x00FFFFFF));
+						DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_EDITINDEX1MARKER), hwndDlg, editSingleMarkerDlgProc, lParam + (selIndex & 0x00FFFFFF));
 					}
 					else if (pMarkerList[selIndex].type == '@') {
-						DialogBoxParam(globalHInstance, MAKEINTRESOURCE(IDD_EDITALBUMMARKER), hwndDlg, editSingleMarkerDlgProc, lParam + (selIndex & 0x00FFFFFF));
+						DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_EDITALBUMMARKER), hwndDlg, editSingleMarkerDlgProc, lParam + (selIndex & 0x00FFFFFF));
 					}
 				}
 			}
 		}
 
 		else if (LOWORD(wParam) == IDC_INSERT_INDEX0_MARKER) {
-			DialogBoxParam(globalHInstance, MAKEINTRESOURCE(IDD_EDITINDEX0MARKER), hwndDlg, editSingleMarkerDlgProc, ('!' << 24) + 0x00FFFFFF);
+			DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_EDITINDEX0MARKER), hwndDlg, editSingleMarkerDlgProc, ('!' << 24) + 0x00FFFFFF);
 		}
 		else if (LOWORD(wParam) == IDC_INSERT_INDEX1_MARKER) {
-			DialogBoxParam(globalHInstance, MAKEINTRESOURCE(IDD_EDITINDEX1MARKER), hwndDlg, editSingleMarkerDlgProc, ('#' << 24) + 0x00FFFFFF);
+			DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_EDITINDEX1MARKER), hwndDlg, editSingleMarkerDlgProc, ('#' << 24) + 0x00FFFFFF);
 		}
 		else if (LOWORD(wParam) == IDC_INSERT_ALBUM_MARKER) {
-			DialogBoxParam(globalHInstance, MAKEINTRESOURCE(IDD_EDITALBUMMARKER), hwndDlg, editSingleMarkerDlgProc, ('@' << 24) + 0x00FFFFFF);
+			DialogBoxParam(g_hInst, MAKEINTRESOURCE(IDD_EDITALBUMMARKER), hwndDlg, editSingleMarkerDlgProc, ('@' << 24) + 0x00FFFFFF);
 		}
+
+		if (LOWORD(wParam) == IDC_PLAY_BUTTON)
+			Main_OnCommand(40044, 0); //Transport play/stop
+
 
 		if (LOWORD(wParam) != IDCANCEL) return 0;
 		EndDialog(hwndDlg, IDCANCEL);
@@ -861,8 +798,15 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 		if (hEditMarkersDlg) saveConfiguration();
 		KillTimer(hwndDlg, 1);
 		freeMarkerList();
+		m_bPlayOnSel = IsDlgButtonChecked(hwndDlg, IDC_PLAY) == BST_CHECKED;
 		CheckMenuItem(hEditMenu, editMarkersRegisteredCommand, MF_UNCHECKED);
 		hEditMarkersDlg = NULL;
+		char configFileName[1024];
+		const char* inifilepath = GetResourcePath();
+		sprintf(configFileName, "%s//ddpEdit.ini", inifilepath);
+		char cOptions[4];
+		sprintf(cOptions, "%c", m_bPlayOnSel ? '1' : '0');
+		WritePrivateProfileString(SEEK_PLAY_INI_SECTION, SEEK_PLAY_KEY, cOptions, configFileName);
 	}; return 0;
 	}
 	return 0;
@@ -872,7 +816,7 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 bool editMarkersHookCommandProc(int command, int flag) {
 	if (editMarkersRegisteredCommand && (command == editMarkersRegisteredCommand)) {
 		if (hEditMarkersDlg == NULL) {
-			HWND h = CreateDialog(globalHInstance, MAKEINTRESOURCE(IDD_EDITMARKERS), hParentWnd, editMarkersDlgProc);
+			HWND h = CreateDialog(g_hInst, MAKEINTRESOURCE(IDD_EDITMARKERS), hParentWnd, editMarkersDlgProc);
 			if (h) ShowWindow(h, SW_SHOW);
 		}
 		else DestroyWindow(hEditMarkersDlg);
@@ -883,7 +827,7 @@ bool editMarkersHookCommandProc(int command, int flag) {
 }
 extern "C" {
 	REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hInstance, reaper_plugin_info_t *rec) {
-		globalHInstance = hInstance;
+		g_hInst = hInstance;
 		if (rec) {
 			if (rec->caller_version != REAPER_PLUGIN_VERSION || !rec->GetFunc)
 				return 0; /*todo: proper error*/
