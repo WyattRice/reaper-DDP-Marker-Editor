@@ -1,7 +1,7 @@
 # reaper-DDP-Marker-Editor
 A Reaper plugin extension that edits DDP markers in a listbox.
 
-Original code by Sergej Maršnjak.
+Original code by Sergej Maršnjak. Many thanks for sharing, and making this possible.
 
 Special thanks to Justin Frankel for fixing bugs, and porting to Mac.
 
