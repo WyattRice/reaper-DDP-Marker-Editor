@@ -26,6 +26,7 @@ HWND g_parent; // global variable that holds the handle to the Reaper main windo
 #define MoveWindow(hwnd,x,y,w,h,activate) SetWindowPos(hwnd,NULL,x,y,w,h,SWP_NOZORDER)
 #endif
 
+#define SNM_MAX_PATH					2048
 
 #define MARKERS_INI_SECTION			"DDP marker editor"
 #define SEEK_PLAY_INI_SECTION		"Seek play"
@@ -54,6 +55,22 @@ typedef struct {
 } MarkerData;
 
 bool m_bPlayOnSel;
+
+void SetWndIcon(HWND hwnd)
+{
+#ifdef _WIN32
+	static HICON s_icon = NULL;
+	if (!s_icon)
+	{
+		wchar_t path[SNM_MAX_PATH];
+		if (GetModuleFileNameW(NULL, path, sizeof(path) / sizeof(wchar_t)))
+			s_icon = ExtractIconW(g_hInst, path, 0); // WM_GETICON isn't working so use this instead
+	}
+
+	if (s_icon)
+		SendMessage(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)s_icon);
+#endif
+}
 
 void prepareTimeString(char *buffer, double time, char *separator) {
 	if (separator == NULL) separator = "";
@@ -121,8 +138,6 @@ bool getKeyValuePair(char *token, char **key, char **value) {
 	(*value)[len] = '\0';
 	return true;
 }
-
-
 
 
 
@@ -203,8 +218,6 @@ void loadConfiguration(void) {
 	if (winY < 0) winY = (GetSystemMetrics(SM_CYSCREEN) - winH) >> 1;
 	MoveWindow(hEditMarkersDlg, winX, winY, winW, winH, 1);
 
-	//LVCOLUMN lvc;
-	//lvc.mask = LVCF_WIDTH;
 	int order[NUM_MARKER_COLUMNS];
 	for (int colIndex = 0; colIndex < NUM_MARKER_COLUMNS; ++colIndex) {
 		char key[32];
@@ -571,6 +584,7 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 		LVCOLUMN lvc;
 
 		hEditMarkersDlg = hwndDlg;
+		SetWndIcon(hwndDlg);
 		CheckMenuItem(hEditMenu, editMarkersRegisteredCommand, MF_CHECKED);
 		char cOptions[10];
 		char configFileName[1024];
@@ -578,11 +592,9 @@ WDL_DLGRET editMarkersDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lPa
 		sprintf(configFileName, "%s//ddpEdit.ini", inifilepath);
 		GetPrivateProfileString(SEEK_PLAY_INI_SECTION, SEEK_PLAY_KEY, "1 1", cOptions, 10, configFileName);
 		m_bPlayOnSel = (cOptions[0] == '1');
-		//m_bScroll = (cOptions[2] == '1');
 
 		CheckDlgButton(hwndDlg, IDC_PLAY, m_bPlayOnSel ? BST_CHECKED : BST_UNCHECKED);
 
-		//CheckDlgButton(hwndDlg, IDC_PLAY, m_bPlayOnSel ? BST_CHECKED : BST_UNCHECKED);
 		hMarkerListWnd = GetDlgItem(hwndDlg, IDC_MARKERS_LIST);
 		//From SWS Extensions Thanks!
 		int lvstyle = LVS_EX_FULLROWSELECT | LVS_EX_HEADERDRAGDROP;
